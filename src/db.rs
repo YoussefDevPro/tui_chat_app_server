@@ -1,19 +1,11 @@
-use sqlx::{
-    sqlite::{SqlitePoolOptions, SqliteRow},
-    Pool, Row, Sqlite,
-};
+use sqlx::{Row, SqlitePool};
 use std::time::Duration;
 
-pub type DbPool = Pool<Sqlite>;
+pub type DbPool = SqlitePool;
 
 pub async fn init_db() -> anyhow::Result<DbPool> {
-    let pool = SqlitePoolOptions::new()
-        .max_connections(5)
-        .connect_timeout(Duration::from_secs(30))
-        .connect("sqlite://chat_server.db")
-        .await?;
+    let pool = SqlitePool::connect("sqlite::memory:").await?;
 
-    // Create tables if not exist
     sqlx::query(
         r#"
         CREATE TABLE IF NOT EXISTS users (

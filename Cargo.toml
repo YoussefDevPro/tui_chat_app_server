@@ -4,11 +4,12 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-anyhow = "1.0.98"
-argon2 = "0.5.3"
-rand = "0.9.1"
-serde = {version="1.0.219", features = ["derive"]}
-serde_json = "1.0.140"
-sqlx = "0.8.6"
 tokio = { version = "1.45.1", features = ["full"] }
-uuid = "1.17.0"
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.140"
+anyhow = "1.0.98"
+uuid = { version = "1.17.0", features = ["v4"] }
+chrono = { version = "0.4.41", features = ["serde"] }
+argon2 = "0.5.3"
+rand_core = { version = "0.6.4", features=["std"] }
+sqlx = { version = "0.8.6", features = ["runtime-tokio", "sqlite", "chrono", "uuid"] }

@@ -2,10 +2,11 @@ use crate::{
     db::DbPool,
     models::{ActionResponse, User},
 };
-use argon2::{self, Config, Variant};
+use argon2::password_hash::rand_core::OsRng;
+use argon2::password_hash::{PasswordHash, SaltString};
+use argon2::{Argon2, PasswordHasher, PasswordVerifier};
 use chrono::Utc;
-use rand::Rng;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -39,16 +40,12 @@ pub async fn register(db: DbPool, payload: Value) -> anyhow::Result<ActionRespon
     let role = "member";
 
     // Hash password
-    let salt: [u8; 16] = rand::thread_rng().gen();
-    let password_hash = argon2::hash_encoded(
-        password.as_bytes(),
-        &salt,
-        &Config {
-            variant: Variant::Argon2id,
-            ..Default::default()
-        },
-    )
-    .unwrap();
+    let salt = SaltString::generate(&mut OsRng);
+    let argon2 = Argon2::default();
+    let password_hash = Argon2::default()
+        .hash_password(password.as_bytes(), &salt)
+        .map_err(|e| anyhow::anyhow!("{e}"))?
+        .to_string();
 
     // Insert user
     let res = sqlx::query("INSERT INTO users (id, username, password_hash, icon, role, created_at) VALUES (?, ?, ?, ?, ?, ?)")
@@ -87,7 +84,13 @@ pub async fn login(db: DbPool, payload: Value) -> anyhow::Result<ActionResponse>
         .await?;
 
     if let Some(user) = user {
-        if argon2::verify_encoded(&user.password_hash, password.as_bytes()).unwrap_or(false) {
+        let parsed_hash =
+            PasswordHash::new(&user.password_hash).map_err(|e| anyhow::anyhow!("{e}"))?;
+        let argon2 = Argon2::default();
+        if argon2
+            .verify_password(password.as_bytes(), &parsed_hash)
+            .is_ok()
+        {
             Ok(ActionResponse::ok(serde_json::json!({
                 "user_id": user.id,
                 "username": user.username,
