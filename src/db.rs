@@ -1,5 +1,4 @@
-use sqlx::{Row, SqlitePool};
-use std::time::Duration;
+use sqlx::SqlitePool;
 
 pub type DbPool = SqlitePool;
 

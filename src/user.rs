@@ -1,6 +1,6 @@
 use crate::{
     db::DbPool,
-    models::{ActionResponse, BannedUser, User},
+    models::{ActionResponse, User},
 };
 use chrono::Utc;
 use serde::Deserialize;

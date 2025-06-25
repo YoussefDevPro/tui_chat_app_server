@@ -1,5 +1,4 @@
-use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
@@ -10,7 +9,6 @@ mod db;
 mod models;
 mod user;
 
-use db::DbPool;
 use models::{ActionRequest, ActionResponse};
 
 #[tokio::main]
