@@ -1,106 +1,126 @@
 use crate::{
-    db::DbPool,
-    models::{ActionResponse, User},
+    db::DbConn,
+    models::{Claims, User},
 };
-use argon2::password_hash::rand_core::OsRng;
-use argon2::password_hash::{PasswordHash, SaltString};
-use argon2::{Argon2, PasswordHasher, PasswordVerifier};
-use chrono::Utc;
-use serde::Deserialize;
-use serde_json::Value;
+use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, TokenData, Validation};
+use rocket::{
+    get,
+    http::Status,
+    post,
+    request::{FromRequest, Outcome, Request},
+    serde::json::Json,
+    State,
+};
+use serde::{Deserialize, Serialize};
+use std::env;
 use uuid::Uuid;
 
 #[derive(Deserialize)]
-struct RegisterPayload {
-    username: String,
-    password: String,
-    icon: String,
+pub struct RegisterInput {
+    pub username: String,
+    pub password_hash: String,
 }
 
 #[derive(Deserialize)]
-struct LoginPayload {
-    username: String,
-    password: String,
+pub struct LoginInput {
+    pub username: String,
+    pub password_hash: String,
 }
 
-pub async fn register(db: DbPool, payload: Value) -> anyhow::Result<ActionResponse> {
-    let RegisterPayload {
-        username,
-        password,
-        icon,
-    } = serde_json::from_value(payload)?;
-    if username.len() < 3 || username.len() > 32 {
-        return Ok(ActionResponse::error("Username length must be 3-32 chars"));
-    }
-    if icon.len() > 6 {
-        return Ok(ActionResponse::error("Icon too long"));
-    }
-    let user_id = Uuid::new_v4().to_string();
-    let created_at = Utc::now().to_rfc3339();
-    let role = "member";
+#[derive(Serialize)]
+pub struct TokenResponse {
+    pub token: String,
+}
 
-    // Hash password
-    let salt = SaltString::generate(&mut OsRng);
-    let password_hash = Argon2::default()
-        .hash_password(password.as_bytes(), &salt)
-        .map_err(|e| anyhow::anyhow!("{e}"))?
-        .to_string();
+#[post("/register", data = "<input>")]
+pub async fn register(
+    db: &State<DbConn>,
+    input: Json<RegisterInput>,
+) -> Result<Json<TokenResponse>, Status> {
+    let id = Uuid::new_v4();
+    let username = &input.username;
+    let password_hash = &input.password_hash;
 
-    // Insert user
-    let res = sqlx::query("INSERT INTO users (id, username, password_hash, icon, role, created_at) VALUES (?, ?, ?, ?, ?, ?)")
-        .bind(&user_id)
-        .bind(&username)
-        .bind(&password_hash)
-        .bind(&icon)
-        .bind(&role)
-        .bind(&created_at)
-        .execute(&db)
+    let res = sqlx::query("INSERT INTO users (id, username, password_hash) VALUES (?, ?, ?)")
+        .bind(id)
+        .bind(username)
+        .bind(password_hash)
+        .execute(db.inner())
         .await;
+
     match res {
-        Ok(_) => Ok(ActionResponse::ok(serde_json::json!({
-            "user_id": user_id,
-            "username": username,
-            "icon": icon,
-            "role": role,
-            "created_at": created_at
-        }))),
-        Err(e) => {
-            if e.to_string().contains("UNIQUE constraint failed") {
-                Ok(ActionResponse::error("Username already exists"))
-            } else {
-                Ok(ActionResponse::error(&format!("DB Error: {e}")))
+        Ok(_) => {
+            let token = generate_token(username)?;
+            Ok(Json(TokenResponse { token }))
+        }
+        Err(_) => Err(Status::Conflict),
+    }
+}
+
+#[post("/login", data = "<input>")]
+pub async fn login(
+    db: &State<DbConn>,
+    input: Json<LoginInput>,
+) -> Result<Json<TokenResponse>, Status> {
+    let username = &input.username;
+    let password_hash = &input.password_hash;
+
+    let user =
+        sqlx::query_as::<_, User>("SELECT * FROM users WHERE username = ? AND password_hash = ?")
+            .bind(username)
+            .bind(password_hash)
+            .fetch_optional(db.inner())
+            .await
+            .map_err(|_| Status::InternalServerError)?;
+
+    match user {
+        Some(_) => {
+            let token = generate_token(username)?;
+            Ok(Json(TokenResponse { token }))
+        }
+        None => Err(Status::Unauthorized),
+    }
+}
+
+fn generate_token(username: &str) -> Result<String, Status> {
+    let secret = env::var("JWT_SECRET").unwrap_or("secret".to_string());
+    let claims = Claims {
+        sub: username.to_owned(),
+        exp: (chrono::Utc::now().timestamp() + 60 * 60 * 24) as usize, // 24h
+    };
+    encode(
+        &Header::default(),
+        &claims,
+        &EncodingKey::from_secret(secret.as_bytes()),
+    )
+    .map_err(|_| Status::InternalServerError)
+}
+
+pub struct AuthUser(pub String);
+
+#[rocket::async_trait]
+impl<'r> FromRequest<'r> for AuthUser {
+    type Error = ();
+
+    async fn from_request(req: &'r Request<'_>) -> Outcome<Self, Self::Error> {
+        let secret = env::var("JWT_SECRET").unwrap_or("secret".to_string());
+        if let Some(auth) = req.headers().get_one("Authorization") {
+            if let Some(token) = auth.strip_prefix("Bearer ") {
+                let res = decode::<Claims>(
+                    token,
+                    &DecodingKey::from_secret(secret.as_bytes()),
+                    &Validation::default(),
+                );
+                if let Ok(TokenData { claims, .. }) = res {
+                    return Outcome::Success(AuthUser(claims.sub));
+                }
             }
         }
+        Outcome::Error((Status::Unauthorized, ()))
     }
 }
 
-pub async fn login(db: DbPool, payload: Value) -> anyhow::Result<ActionResponse> {
-    let LoginPayload { username, password } = serde_json::from_value(payload)?;
-
-    let user: Option<User> = sqlx::query_as("SELECT * FROM users WHERE username = ?")
-        .bind(&username)
-        .fetch_optional(&db)
-        .await?;
-
-    if let Some(user) = user {
-        let parsed_hash =
-            PasswordHash::new(&user.password_hash).map_err(|e| anyhow::anyhow!("{e}"))?;
-        let argon2 = Argon2::default();
-        if argon2
-            .verify_password(password.as_bytes(), &parsed_hash)
-            .is_ok()
-        {
-            Ok(ActionResponse::ok(serde_json::json!({
-                "user_id": user.id,
-                "username": user.username,
-                "role": user.role,
-                "icon": user.icon,
-                "created_at": user.created_at
-            })))
-        } else {
-            Ok(ActionResponse::error("Invalid password"))
-        }
-    } else {
-        Ok(ActionResponse::error("User not found"))
-    }
+#[get("/me")]
+pub async fn me(user: AuthUser) -> Json<String> {
+    Json(user.0)
 }

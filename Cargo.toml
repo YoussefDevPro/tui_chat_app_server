@@ -4,12 +4,17 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-tokio = { version = "1.45.1", features = ["full"] }
+rocket = { version = "0.5.0-rc.3", features = ["json"] }
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.140"
-anyhow = "1.0.98"
-uuid = { version = "1.17.0", features = ["v4"] }
-chrono = { version = "0.4.41", features = ["serde"] }
-argon2 = "0.5.3"
-rand_core = { version = "0.6.4", features=["std"] }
-sqlx = { version = "0.8.6", features = ["runtime-tokio", "sqlite", "chrono", "uuid"] }
+tokio = { version = "1.45.1", features = ["full"] }
+sqlx = { version = "0.8.6", features = ["runtime-tokio", "sqlite", "macros", "uuid"] }
+uuid = { version = "1.17.0", features = ["v4", "serde"] }
+redis = { version = "0.24.0", features = ["tokio-comp"] }
+jsonwebtoken = "9.3.1"
+dotenv = "0.15.0"
+async-trait = "0.1.88"
+chrono = "0.4.41"
+tokio-tungstenite = "0.27.0"
+tungstenite = "0.27.0"
+futures-util = "0.3.31"

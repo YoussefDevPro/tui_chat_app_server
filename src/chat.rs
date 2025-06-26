@@ -1,66 +1,121 @@
-use crate::{
-    db::DbPool,
-    models::{ActionResponse, Message, User},
-};
+use crate::auth::AuthUser;
+use crate::models::Message;
 use chrono::Utc;
-use serde::Deserialize;
-use serde_json::Value;
-use uuid::Uuid;
+use redis::AsyncCommands;
+use rocket::info;
+use rocket::{http::Status, post, serde::json::Json, State};
+use sqlx::SqlitePool;
+use std::sync::Arc;
+use tokio::sync::{broadcast, Mutex};
 
-#[derive(Deserialize)]
-struct SendMessagePayload {
-    sender_id: String,
-    content: String,
+#[derive(serde::Deserialize)]
+pub struct MessageInput {
+    pub content: String,
 }
 
-#[derive(Deserialize)]
-struct GetMessagesPayload {
-    limit: usize,
-}
+// Message broadcaster for WebSocket clients
+pub type Broadcaster = broadcast::Sender<String>;
+pub type BroadcasterHandle = Arc<Mutex<Broadcaster>>;
 
-pub async fn send_message(db: DbPool, payload: Value) -> anyhow::Result<ActionResponse> {
-    let SendMessagePayload { sender_id, content } = serde_json::from_value(payload)?;
-    if content.len() == 0 || content.len() > 2048 {
-        return Ok(ActionResponse::error("Invalid message length"));
+/// Attach this in your Rocket state initialization.
+/// Example:
+/// let (broadcaster, _) = broadcast::channel(100);
+/// rocket.manage(Arc::new(Mutex::new(broadcaster)));
+
+#[post("/send", data = "<input>")]
+pub async fn send_message(
+    user: AuthUser,
+    db: &State<SqlitePool>,
+    redis_url: &State<String>,
+    broadcaster: &State<BroadcasterHandle>,
+    input: Json<MessageInput>,
+) -> Result<Status, Status> {
+    let content = input.content.trim();
+
+    // 1. Validation
+    if content.is_empty() {
+        info!("Rejected empty message from user: {}", user.0);
+        return Err(Status::BadRequest);
     }
-    let message_id = Uuid::new_v4().to_string();
-    let created_at = Utc::now().to_rfc3339();
-
-    sqlx::query("INSERT INTO messages (id, sender_id, content, created_at) VALUES (?, ?, ?, ?)")
-        .bind(&message_id)
-        .bind(&sender_id)
-        .bind(&content)
-        .bind(&created_at)
-        .execute(&db)
-        .await?;
-
-    Ok(ActionResponse::ok(serde_json::json!({
-        "message_id": message_id,
-        "created_at": created_at
-    })))
-}
-
-pub async fn get_messages(db: DbPool, payload: Value) -> anyhow::Result<ActionResponse> {
-    let GetMessagesPayload { limit } = serde_json::from_value(payload)?;
-    let rows =
-        sqlx::query_as::<_, Message>("SELECT * FROM messages ORDER BY created_at DESC LIMIT ?")
-            .bind(limit as i64)
-            .fetch_all(&db)
-            .await?;
-
-    // Fetch usernames/icons for each message
-    let mut messages = Vec::new();
-    for msg in rows.into_iter().rev() {
-        let sender: Option<User> = sqlx::query_as("SELECT * FROM users WHERE id = ?")
-            .bind(&msg.sender_id)
-            .fetch_optional(&db)
-            .await?;
-        messages.push(serde_json::json!({
-            "content": msg.content,
-            "sender": sender.as_ref().map(|u| u.username.clone()).unwrap_or("??".to_string()),
-            "icon": sender.as_ref().map(|u| u.icon.clone()).unwrap_or("".to_string()),
-            "created_at": msg.created_at,
-        }));
+    if content.len() > 1000 {
+        info!(
+            "Rejected long message from user: {} ({} chars)",
+            user.0,
+            content.len()
+        );
+        return Err(Status::BadRequest);
     }
-    Ok(ActionResponse::ok(messages))
+
+    // 2. Check user in database for extra security
+    let db_user: Option<(String,)> =
+        match sqlx::query_as("SELECT username FROM users WHERE username = ?")
+            .bind(&user.0)
+            .fetch_optional(db.inner())
+            .await
+        {
+            Ok(result) => result,
+            Err(e) => {
+                info!("DB error while checking user existence: {:?}", e);
+                return Err(Status::InternalServerError);
+            }
+        };
+    if db_user.is_none() {
+        info!("User from token not found in DB: {}", user.0);
+        return Err(Status::Unauthorized);
+    }
+
+    // 3. Optional: Basic profanity filtering (simple example)
+    let profanities = ["badword", "swear"]; // put your own list here
+    for word in profanities.iter() {
+        if content.to_lowercase().contains(word) {
+            info!("Profanity detected from user: {}", user.0);
+            return Err(Status::BadRequest);
+        }
+    }
+
+    // 4. Optional: Basic rate limiting (per user in-memory, example)
+    // If you want to implement rate limiting, use a shared HashMap<username, last_message_time>
+    // and refuse if the user has sent too many messages in a short time.
+
+    // 5. Construct and serialize message
+    let msg = Message {
+        user: user.0.clone(),
+        content: content.to_owned(),
+        timestamp: Utc::now().timestamp(),
+    };
+    let msg_json = match serde_json::to_string(&msg) {
+        Ok(j) => j,
+        Err(e) => {
+            info!("Serialization error: {:?}", e);
+            return Err(Status::InternalServerError);
+        }
+    };
+
+    // 6. Publish to Redis
+    let client = match redis::Client::open(redis_url.inner().as_str()) {
+        Ok(c) => c,
+        Err(e) => {
+            info!("Redis client error: {:?}", e);
+            return Err(Status::InternalServerError);
+        }
+    };
+    let mut conn = match client.get_async_connection().await {
+        Ok(c) => c,
+        Err(e) => {
+            info!("Redis connection error: {:?}", e);
+            return Err(Status::InternalServerError);
+        }
+    };
+    if let Err(e) = conn.publish::<_, _, ()>("chat", msg_json.clone()).await {
+        info!("Redis publish error: {:?}", e);
+        return Err(Status::InternalServerError);
+    }
+
+    // 7. Broadcast to all connected WebSocket clients
+    {
+        let broadcaster = broadcaster.lock().await;
+        let _ = broadcaster.send(msg_json); // ignore errors (e.g. no clients)
+    }
+
+    Ok(Status::Ok)
 }
