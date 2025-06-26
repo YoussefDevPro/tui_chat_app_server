@@ -83,7 +83,8 @@ pub async fn login(
 }
 
 fn generate_token(username: &str) -> Result<String, Status> {
-    let secret = env::var("JWT_SECRET").unwrap_or("secret".to_string());
+    let secret = env::var("JWT_SECRET")
+        .unwrap_or("heyoheyoimahardcodedsecretandimgonnabepushedtotherepoingithubyay".to_string());
     let claims = Claims {
         sub: username.to_owned(),
         exp: (chrono::Utc::now().timestamp() + 60 * 60 * 24) as usize, // 24h
@@ -103,7 +104,9 @@ impl<'r> FromRequest<'r> for AuthUser {
     type Error = ();
 
     async fn from_request(req: &'r Request<'_>) -> Outcome<Self, Self::Error> {
-        let secret = env::var("JWT_SECRET").unwrap_or("secret".to_string());
+        let secret = env::var("JWT_SECRET").unwrap_or(
+            "heyoheyoimahardcodedsecretandimgonnabepushedtotherepoingithubyay".to_string(),
+        );
         if let Some(auth) = req.headers().get_one("Authorization") {
             if let Some(token) = auth.strip_prefix("Bearer ") {
                 let res = decode::<Claims>(

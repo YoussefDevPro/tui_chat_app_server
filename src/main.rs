@@ -21,10 +21,11 @@ async fn main() -> Result<(), rocket::Error> {
     let db = establish_db().await.expect("DB connection failed");
     let redis_url = std::env::var("REDIS_URL").unwrap_or("redis://127.0.0.1/".to_string());
     let (broadcaster, _) = broadcast::channel::<String>(100);
-    // Start WebSocket server in background
     let redis_url_ws = redis_url.clone();
+    let jwt_secret = "heyoheyoimahardcodedsecretandimgonnabepushedtotherepoingithubyay".to_string(); // Or load from config/env
+
     tokio::spawn(async move {
-        ws::websocket_server(redis_url_ws, "127.0.0.1:9001")
+        ws::websocket_server(redis_url_ws, "127.0.0.1:9001", jwt_secret)
             .await
             .unwrap();
     });
