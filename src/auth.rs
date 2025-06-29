@@ -1,37 +1,42 @@
-use crate::{
-    db::DbConn,
-    models::{Claims, User},
-};
+use crate::{db::DbConn, models::Claims};
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, TokenData, Validation};
 use rocket::{
-    get,
     http::Status,
     post,
     request::{FromRequest, Outcome, Request},
     serde::json::Json,
     State,
 };
-use serde::{Deserialize, Serialize};
+use sqlx::FromRow;
 use std::env;
 use uuid::Uuid;
 
-#[derive(Deserialize)]
+#[derive(serde::Deserialize)]
 pub struct RegisterInput {
     pub username: String,
     pub password_hash: String,
+    pub icon: String, // New field
 }
 
-#[derive(Deserialize)]
+#[derive(serde::Deserialize)]
 pub struct LoginInput {
     pub username: String,
     pub password_hash: String,
 }
 
-#[derive(Serialize)]
+#[derive(serde::Serialize)]
 pub struct TokenResponse {
     pub token: String,
+    pub icon: String, // New field
 }
 
+#[derive(FromRow)]
+pub struct User {
+    pub id: Uuid,
+    pub username: String,
+    pub password_hash: String,
+    pub icon: String, // Ensure this is here
+}
 #[post("/register", data = "<input>")]
 pub async fn register(
     db: &State<DbConn>,
@@ -40,18 +45,24 @@ pub async fn register(
     let id = Uuid::new_v4();
     let username = &input.username;
     let password_hash = &input.password_hash;
+    let icon = &input.icon;
 
-    let res = sqlx::query("INSERT INTO users (id, username, password_hash) VALUES (?, ?, ?)")
-        .bind(id)
-        .bind(username)
-        .bind(password_hash)
-        .execute(db.inner())
-        .await;
+    let res =
+        sqlx::query("INSERT INTO users (id, username, password_hash, icon) VALUES (?, ?, ?, ?)")
+            .bind(id)
+            .bind(username)
+            .bind(password_hash)
+            .bind(icon)
+            .execute(db.inner())
+            .await;
 
     match res {
         Ok(_) => {
             let token = generate_token(username)?;
-            Ok(Json(TokenResponse { token }))
+            Ok(Json(TokenResponse {
+                token,
+                icon: icon.clone(),
+            }))
         }
         Err(_) => Err(Status::Conflict),
     }
@@ -74,17 +85,19 @@ pub async fn login(
             .map_err(|_| Status::InternalServerError)?;
 
     match user {
-        Some(_) => {
+        Some(user) => {
             let token = generate_token(username)?;
-            Ok(Json(TokenResponse { token }))
+            Ok(Json(TokenResponse {
+                token,
+                icon: user.icon,
+            }))
         }
         None => Err(Status::Unauthorized),
     }
 }
 
-fn generate_token(username: &str) -> Result<String, Status> {
-    let secret = env::var("JWT_SECRET")
-        .unwrap_or("heyoheyoimahardcodedsecretandimgonnabepushedtotherepoingithubyay".to_string());
+pub fn generate_token(username: &str) -> Result<String, Status> {
+    let secret = env::var("JWT_SECRET").map_err(|_| Status::InternalServerError)?;
     let claims = Claims {
         sub: username.to_owned(),
         exp: (chrono::Utc::now().timestamp() + 60 * 60 * 24) as usize, // 24h
@@ -104,14 +117,12 @@ impl<'r> FromRequest<'r> for AuthUser {
     type Error = ();
 
     async fn from_request(req: &'r Request<'_>) -> Outcome<Self, Self::Error> {
-        let secret = env::var("JWT_SECRET").unwrap_or(
-            "heyoheyoimahardcodedsecretandimgonnabepushedtotherepoingithubyay".to_string(),
-        );
+        let secret = env::var("JWT_SECRET");
         if let Some(auth) = req.headers().get_one("Authorization") {
             if let Some(token) = auth.strip_prefix("Bearer ") {
                 let res = decode::<Claims>(
                     token,
-                    &DecodingKey::from_secret(secret.as_bytes()),
+                    &DecodingKey::from_secret(secret.unwrap().as_bytes()),
                     &Validation::default(),
                 );
                 if let Ok(TokenData { claims, .. }) = res {
@@ -121,9 +132,4 @@ impl<'r> FromRequest<'r> for AuthUser {
         }
         Outcome::Error((Status::Unauthorized, ()))
     }
-}
-
-#[get("/me")]
-pub async fn me(user: AuthUser) -> Json<String> {
-    Json(user.0)
 }

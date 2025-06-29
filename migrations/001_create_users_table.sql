@@ -1,5 +1,9 @@
 CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY,
     username TEXT NOT NULL UNIQUE,
-    password_hash TEXT NOT NULL
+    icon TEXT NOT NULL,
+    password_hash TEXT NOT NULL,
+    IsAdmin BOOLEAN NOT NULL DEFAULT 0,
+    IsBanned BOOLEAN NOT NULL DEFAULT 0,
+    BanMuteUntil INTEGER
 );

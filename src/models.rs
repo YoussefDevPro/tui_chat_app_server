@@ -5,6 +5,7 @@ use uuid::Uuid;
 pub struct User {
     pub id: Uuid,
     pub username: String,
+    pub icon: String,
     pub password_hash: String,
 }
 
@@ -17,6 +18,7 @@ pub struct Claims {
 #[derive(Serialize, Deserialize)]
 pub struct Message {
     pub user: String,
+    pub icon: String,
     pub content: String,
     pub timestamp: i64,
 }
