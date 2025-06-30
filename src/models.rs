@@ -21,4 +21,12 @@ pub struct Message {
     pub icon: String,
     pub content: String,
     pub timestamp: i64,
+    pub channel_id: String,
+}
+
+#[derive(sqlx::FromRow, Serialize, Deserialize, Debug, Clone)]
+pub struct Channel {
+    pub id: String,
+    pub name: String,
+    pub icon: String,
 }
