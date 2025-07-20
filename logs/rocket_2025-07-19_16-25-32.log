@@ -1,0 +1,5 @@
+No channels found. Creating default 'home' channel.
+WebSocket listening on ws://0.0.0.0:34093
+Rocket has launched from http://0.0.0.0:41565
+Registering user: youssef, Hashed Password: $argon2id$v=19$m=19456,t=2,p=1$uJLI2bQBzVcW01aCUm7Brw$601JtVUFB6J4yQQD3XWjG6xrr2DJOIV27RgCzl6OJZw
+WebSocket auth OK for user: youssef

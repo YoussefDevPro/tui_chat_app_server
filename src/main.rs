@@ -3,30 +3,46 @@ extern crate rocket;
 
 mod auth;
 mod db;
+mod files;
 mod models;
 mod ws;
 
 use auth::{login, register};
 use db::establish_db;
-use sqlx::{Pool, Sqlite};
-use std::sync::Arc;
-use tokio::sync::broadcast;
-use tokio::sync::Mutex;
+use files::{download_file, upload_file};
+use redis::Client as RedisClient;
+use sqlx::{Pool, Sqlite}; // Imported download_file
+
+#[derive(Clone)]
+pub struct AppState {
+    pub db: Pool<Sqlite>,
+    pub jwt_secret: String,
+    pub redis_client: RedisClient,
+}
 
 #[rocket::main]
 async fn main() -> Result<(), rocket::Error> {
     dotenv::dotenv().ok();
-    let db: Pool<Sqlite> = establish_db().await.expect("DB connection failed");
-    let redis_url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1/".to_string());
-    let (broadcaster, _) = broadcast::channel::<String>(100);
-    let redis_url_ws = redis_url.clone();
-    let jwt_secret = "heyoheyoimahardcodedsecretandimgonnabepushedtotherepoingithubyay".to_string(); // Or load from config/env
-    let db_ws = db.clone(); // Clone db_pool for the WebSocket server task
+    let db_pool: Pool<Sqlite> = establish_db().await.expect("DB connection failed");
+    let redis_url =
+        std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6333".to_string());
+    let jwt_secret = std::env::var("JWT_SECRET").unwrap_or_else(|_| {
+        "heyoheyoimahardcodedsecretandimgonnabepushedtotherepoingithubyay".to_string()
+    });
+
+    let redis_client =
+        redis::Client::open(redis_url.clone()).expect("Failed to create Redis client");
+
+    let app_state = AppState {
+        db: db_pool.clone(),
+        jwt_secret: jwt_secret.clone(),
+        redis_client,
+    };
 
     // --- Channel creation logic moved here ---
     // Check if any channels exist. If not, create a default "general" channel.
     let channels_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM channels")
-        .fetch_one(&db) // Use the main `db` pool
+        .fetch_one(&db_pool) // Use the main `db` pool
         .await
         .expect("Failed to query channel count");
 
@@ -39,23 +55,24 @@ async fn main() -> Result<(), rocket::Error> {
         .bind("home")
         .bind("Home")
         .bind("")
-        .execute(&db) // Use the main `db` pool
+        .execute(&db_pool) // Use the main `db` pool
         .await
         .expect("Failed to create default 'home' channel");
     }
     // --- End of channel creation logic ---
 
+    let db_ws = db_pool.clone();
+    let redis_url_ws = redis_url.clone();
     tokio::spawn(async move {
-        ws::websocket_server(db_ws, redis_url_ws, "127.0.0.1:9001", jwt_secret)
+        ws::websocket_server(db_ws, redis_url_ws, "0.0.0.0:34093", jwt_secret)
             .await
             .unwrap();
     });
 
     rocket::build()
-        .manage(db)
-        .manage(redis_url)
-        .manage(Arc::new(Mutex::new(broadcaster)))
+        .manage(app_state)
         .mount("/auth", routes![register, login])
+        .mount("/files", routes![upload_file, download_file]) // Mounted download_file
         .launch()
         .await?;
 

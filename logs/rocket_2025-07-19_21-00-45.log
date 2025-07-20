@@ -1,0 +1,13 @@
+WebSocket listening on ws://0.0.0.0:34093
+Rocket has launched from http://0.0.0.0:41565
+Attempting login for user: youssef
+User youssef found. Stored hash: $argon2id$v=19$m=19456,t=2,p=1$uJLI2bQBzVcW01aCUm7Brw$601JtVUFB6J4yQQD3XWjG6xrr2DJOIV27RgCzl6OJZw
+Password verification successful for youssef
+WebSocket auth OK for user: youssef
+   >> Request contains a form that will not be processed.
+Attempting login for user: youssef
+User youssef found. Stored hash: $argon2id$v=19$m=19456,t=2,p=1$uJLI2bQBzVcW01aCUm7Brw$601JtVUFB6J4yQQD3XWjG6xrr2DJOIV27RgCzl6OJZw
+Password verification successful for youssef
+WebSocket auth OK for user: youssef
+   >> Request contains a form that will not be processed.
+Warning: Received SIGTERM. Requesting shutdown.

@@ -1,0 +1,12 @@
+No channels found. Creating default 'home' channel.
+WebSocket listening on ws://0.0.0.0:34093
+Rocket has launched from http://0.0.0.0:41565
+Attempting login for user: youssef
+User youssef not found in database.
+   >> No 401 catcher registered. Using Rocket default.
+Registering user: youssef, Hashed Password: $argon2id$v=19$m=19456,t=2,p=1$p3zhXOWyurD2uHlVCrWCMA$wtc78Gx0IhUG58sZ+BDQ5Ti9V2bDwkM+sODfRGfhT3s
+WebSocket auth OK for user: youssef
+Attempting login for user: youssef
+User youssef found. Stored hash: $argon2id$v=19$m=19456,t=2,p=1$p3zhXOWyurD2uHlVCrWCMA$wtc78Gx0IhUG58sZ+BDQ5Ti9V2bDwkM+sODfRGfhT3s
+Password verification successful for youssef
+WebSocket auth OK for user: youssef

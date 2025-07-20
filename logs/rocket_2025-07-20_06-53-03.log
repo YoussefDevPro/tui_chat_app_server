@@ -1,0 +1,13 @@
+No channels found. Creating default 'home' channel.
+WebSocket listening on ws://0.0.0.0:34093
+Rocket has launched from http://0.0.0.0:41565
+Registering user: youssef, Hashed Password: $argon2id$v=19$m=19456,t=2,p=1$tY3FFoj0o2ZdQJvQOaQjXA$UTY/g9QGDgjcoTo5mu+UGKPAO+2k+v+C6+gYrWQN/fk
+WebSocket auth OK for user: youssef
+   >> Request contains a form that will not be processed.
+   >> Request contains a form that will not be processed.
+Attempting login for user: youssef
+User youssef found. Stored hash: $argon2id$v=19$m=19456,t=2,p=1$tY3FFoj0o2ZdQJvQOaQjXA$UTY/g9QGDgjcoTo5mu+UGKPAO+2k+v+C6+gYrWQN/fk
+Password verification successful for youssef
+WebSocket auth OK for user: youssef
+   >> Request contains a form that will not be processed.
+Warning: Received SIGTERM. Requesting shutdown.
