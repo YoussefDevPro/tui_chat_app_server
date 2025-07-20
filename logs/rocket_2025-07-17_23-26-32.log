@@ -1,8 +1,0 @@
-WebSocket listening on ws://0.0.0.0:34093
-Rocket has launched from http://0.0.0.0:41565
-Registering user: test1234, Hashed Password: $argon2id$v=19$m=19456,t=2,p=1$X7Dl+Qe7g+RoZYBUXiKxZw$z5L8sJIx2D0FpSAeJVo3+BWAT23PiEzS0begBpmyo6k
-WebSocket auth OK for user: test1234
-Attempting login for user: youssef
-User youssef found. Stored hash: $argon2id$v=19$m=19456,t=2,p=1$3yT8frrR4Az+XePK5XCQwA$8mKN7GnjdDIVLTkusy/x8nByWqZXK0i0du7sDZNq1fk
-Password verification successful for youssef
-WebSocket auth OK for user: youssef
