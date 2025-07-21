@@ -1,3 +1,4 @@
+use log::{info, warn, error, debug};
 use chrono::Utc;
 use futures_util::{SinkExt, StreamExt};
 use jsonwebtoken::{decode, Algorithm, DecodingKey, TokenData, Validation};
@@ -165,17 +166,20 @@ pub async fn websocket_server(
     addr: &str,
     jwt_secret: String,
 ) -> std::io::Result<()> {
+    info!("Attempting to bind WebSocket server to: {}", addr);
     let listener = TcpListener::bind(addr).await?;
-    println!("WebSocket listening on ws://{}", addr);
+    info!("WebSocket listening on ws://{}", addr);
 
     loop {
-        let (stream, _) = listener.accept().await?;
+        debug!("Waiting for new WebSocket connection...");
+        let (stream, peer_addr) = listener.accept().await?;
+        info!("New WebSocket connection from: {}", peer_addr);
         let redis_url = redis_url.clone();
         let jwt_secret = jwt_secret.clone();
         let db_pool = db_pool.clone();
         tokio::spawn(async move {
             if let Err(e) = handle_connection(stream, &db_pool, &redis_url, &jwt_secret).await {
-                eprintln!("WebSocket error: {:?}", e);
+                error!("WebSocket connection handler error: {:?}", e);
             }
         });
     }
@@ -187,14 +191,21 @@ async fn handle_connection(
     redis_url: &str,
     jwt_secret: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+    debug!("Handling new WebSocket connection.");
     let ws_stream = accept_async(stream).await?;
+    info!("WebSocket handshake successful.");
     let (mut ws_sender, mut ws_receiver) = ws_stream.split();
     let (msg_tx, mut msg_rx) = mpsc::unbounded_channel::<WsMessage>();
 
     // Authenticate user with JWT
+    debug!("Waiting for JWT token from client.");
     let jwt_msg = match ws_receiver.next().await {
-        Some(Ok(WsMessage::Text(token))) => token,
+        Some(Ok(WsMessage::Text(token))) => {
+            info!("Received JWT token from client.");
+            token
+        },
         _ => {
+            warn!("No JWT token provided or invalid message type. Closing connection.");
             let _ = ws_sender
                 .send(WsMessage::Close(Some(CloseFrame {
                     code: CloseCode::Policy,
@@ -205,6 +216,7 @@ async fn handle_connection(
         }
     };
 
+    debug!("Decoding JWT token.");
     let token_data: Result<TokenData<Claims>, _> = decode::<Claims>(
         &jwt_msg,
         &DecodingKey::from_secret(jwt_secret.as_ref()),
@@ -212,8 +224,12 @@ async fn handle_connection(
     );
 
     let user_username = match token_data {
-        Ok(data) => data.claims.sub.clone(),
-        Err(_) => {
+        Ok(data) => {
+            info!("JWT token decoded successfully for user: {}", data.claims.sub);
+            data.claims.sub.clone()
+        },
+        Err(e) => {
+            warn!("Invalid or expired JWT token. Closing connection: {:?}", e);
             let _ = ws_sender
                 .send(WsMessage::Close(Some(CloseFrame {
                     code: CloseCode::Policy,
@@ -224,9 +240,11 @@ async fn handle_connection(
         }
     };
 
-    println!("WebSocket auth OK for user: {}", user_username);
+    info!("WebSocket authentication successful for user: {}", user_username);
 
     // Redis connections for pubsub and commands
+    debug!("Opening Redis client for pubsub and commands.");
+    debug!("Opening Redis client for pubsub and commands.");
     let client = redis::Client::open(redis_url)?;
     // This connection will be moved into the pubsub_task
     let mut pubsub_listener_conn = client.get_async_connection().await?.into_pubsub();
@@ -234,6 +252,8 @@ async fn handle_connection(
     let mut publish_conn = client.get_async_connection().await?;
     // This connection will be used for subscribing to new channels outside the listener task
     let mut pubsub_publisher_conn = client.get_async_connection().await?.into_pubsub();
+    info!("Redis connections established.");
+    info!("Redis connections established.");
 
     // Add user to active users set in Redis
     let _: () = publish_conn.sadd("active_users", &user_username).await?;

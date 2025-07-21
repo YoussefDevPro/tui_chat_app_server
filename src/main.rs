@@ -1,6 +1,8 @@
 #[macro_use]
 extern crate rocket;
 
+use log::{info, warn};
+
 mod auth;
 mod db;
 mod files;
@@ -22,8 +24,10 @@ pub struct AppState {
 
 #[rocket::main]
 async fn main() -> Result<(), rocket::Error> {
+    env_logger::init();
     dotenv::dotenv().ok();
     let db_pool: Pool<Sqlite> = establish_db().await.expect("DB connection failed");
+    info!("Database connection established.");
     let redis_url =
         std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6333".to_string());
     let jwt_secret = std::env::var("JWT_SECRET").unwrap_or_else(|_| {
@@ -32,6 +36,7 @@ async fn main() -> Result<(), rocket::Error> {
 
     let redis_client =
         redis::Client::open(redis_url.clone()).expect("Failed to create Redis client");
+    info!("Redis client created.");
 
     let app_state = AppState {
         db: db_pool.clone(),
@@ -47,7 +52,7 @@ async fn main() -> Result<(), rocket::Error> {
         .expect("Failed to query channel count");
 
     if channels_count == 0 {
-        println!("No channels found. Creating default 'home' channel.");
+        warn!("No channels found. Creating default 'home' channel.");
         sqlx::query(
             // Removed is_private and creator_username
             "INSERT INTO channels (id, name, icon) VALUES (?, ?, ?)",
@@ -69,6 +74,7 @@ async fn main() -> Result<(), rocket::Error> {
             .unwrap();
     });
 
+    info!("Starting Rocket server...");
     rocket::build()
         .manage(app_state)
         .mount("/auth", routes![register, login])

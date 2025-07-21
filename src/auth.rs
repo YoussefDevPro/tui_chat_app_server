@@ -9,6 +9,7 @@ use rocket::{
 };
 use sqlx::FromRow;
 use uuid::Uuid;
+use log::{info, warn, error};
 
 // Add these imports for argon2
 use argon2::{
@@ -59,6 +60,8 @@ pub async fn register(
     let password = &input.password;
     let icon = &input.icon;
 
+    info!("Attempting to register user: {}", username);
+
     // Generate a random salt
     let salt = SaltString::generate(&mut OsRng);
     // Create an Argon2 instance with default parameters (or configure as needed)
@@ -67,8 +70,12 @@ pub async fn register(
     // Hash the password
     let hashed_password = argon2
         .hash_password(password.as_bytes(), &salt)
-        .map_err(|_| Status::InternalServerError)? // Handle hashing errors
+        .map_err(|e| {
+            error!("Password hashing failed for user: {}: {:?}", username, e);
+            Status::InternalServerError
+        })? // Handle hashing errors
         .to_string(); // Convert the PasswordHash struct to a string for storage
+    info!("Password hashed successfully for user: {}", username);
     eprintln!("Registering user: {}, Hashed Password: {}", username, hashed_password);
 
     let res =
@@ -82,13 +89,17 @@ pub async fn register(
 
     match res {
         Ok(_) => {
+            info!("User {} successfully registered.", username);
             let token = generate_token(username, &state.jwt_secret)?;
             Ok(Json(TokenResponse {
                 token,
                 icon: icon.clone(),
             }))
         }
-        Err(_) => Err(Status::Conflict), // Username might already exist, or other DB error
+        Err(e) => {
+            warn!("Failed to register user {}: {:?}", username, e);
+            Err(Status::Conflict)
+        } // Username might already exist, or other DB error
     }
 }
 
@@ -100,6 +111,8 @@ pub async fn login(
     let username = &input.username;
     let password = &input.password; // Plain password from input
 
+    info!("Attempting login for user: {}", username);
+
     eprintln!("Attempting login for user: {}", username);
 
     let user = sqlx::query_as::<_, User>("SELECT * FROM users WHERE username = ?")
@@ -107,17 +120,17 @@ pub async fn login(
         .fetch_optional(&state.db)
         .await
         .map_err(|e| {
-            eprintln!("Database error fetching user {}: {:?}", username, e);
+            error!("Database error fetching user {}: {:?}", username, e);
             Status::InternalServerError
         })?;
 
     match user {
         Some(user) => {
-            eprintln!("User {} found. Stored hash: {}", username, user.password_hash);
+            info!("User {} found. Verifying password.", username);
             // Reconstruct the stored hash from the string
             let parsed_hash = argon2::password_hash::PasswordHash::new(&user.password_hash)
                 .map_err(|e| {
-                    eprintln!("Error parsing stored hash for {}: {:?}", username, e);
+                    error!("Error parsing stored hash for {}: {:?}", username, e);
                     Status::InternalServerError
                 })?; // Error if stored hash is invalid
 
@@ -127,26 +140,28 @@ pub async fn login(
             let passwords_match = argon2
                 .verify_password(password.as_bytes(), &parsed_hash)
                 .map(|_| {
-                    eprintln!("Password verification successful for {}", username);
+                    info!("Password verification successful for {}", username);
                     true
                 }) // If verification succeeds, map to true
                 .map_err(|e| {
-                    eprintln!("Password verification failed for {}: {:?}", username, e);
+                    warn!("Password verification failed for {}: {:?}", username, e);
                     Status::Unauthorized
                 })?; // If verification fails (or internal error), map to Unauthorized
 
             if passwords_match {
-                let token = generate_token(username, &state.jwt_secret)?; 
+                let token = generate_token(username, &state.jwt_secret)?;
+                info!("Login successful for user: {}", username);
                 Ok(Json(TokenResponse {
                     token,
                     icon: user.icon,
                 }))
             } else {
+                warn!("Incorrect password for user: {}", username);
                 Err(Status::Unauthorized) // Passwords don't match
             }
         }
         None => {
-            eprintln!("User {} not found in database.", username);
+            warn!("User {} not found in database.", username);
             Err(Status::Unauthorized) // User not found
         }
     }
@@ -167,7 +182,7 @@ pub fn generate_token(username: &str, secret: &str) -> Result<String, Status> {
 
 #[derive(Debug)]
 #[allow(dead_code)]
-pub struct AuthUser(pub String);
+pub struct AuthUser(pub String, pub String);
 
 #[rocket::async_trait]
 impl<'r> FromRequest<'r> for AuthUser {
@@ -183,7 +198,19 @@ impl<'r> FromRequest<'r> for AuthUser {
                     &Validation::default(),
                 );
                 if let Ok(TokenData { claims, .. }) = res {
-                    return Outcome::Success(AuthUser(claims.sub));
+                    let username = claims.sub;
+                    // Retrieve user icon from the database
+                    let user_info = sqlx::query_as::<_, User>("SELECT * FROM users WHERE username = ?")
+                        .bind(&username)
+                        .fetch_one(&state.db)
+                        .await;
+
+                    if let Ok(user) = user_info {
+                        return Outcome::Success(AuthUser(username, user.icon));
+                    } else {
+                        error!("Failed to retrieve user info for {}. Token valid but user not found in DB.", username);
+                        return Outcome::Error((Status::InternalServerError, ()));
+                    }
                 }
             }
         }
