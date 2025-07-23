@@ -8,6 +8,9 @@ mod db;
 mod files;
 mod models;
 mod ws;
+mod utils;
+mod data_access;
+mod commands;
 
 use auth::{login, register};
 use db::establish_db;

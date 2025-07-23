@@ -47,5 +47,6 @@ CREATE TABLE IF NOT EXISTS files (
     uploader_username TEXT NOT NULL,
     size_bytes INTEGER NOT NULL,
     channel_id TEXT NOT NULL,
-    created_at INTEGER NOT NULL
+    created_at INTEGER NOT NULL,
+    file_extension TEXT
 );

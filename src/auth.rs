@@ -1,5 +1,6 @@
 use crate::{models::Claims, AppState};
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, TokenData, Validation};
+use log::{error, info, warn};
 use rocket::{
     http::Status,
     post,
@@ -9,9 +10,7 @@ use rocket::{
 };
 use sqlx::FromRow;
 use uuid::Uuid;
-use log::{info, warn, error};
 
-// Add these imports for argon2
 use argon2::{
     password_hash::{
         rand_core::OsRng, // For generating secure random salts
@@ -19,7 +18,7 @@ use argon2::{
         PasswordVerifier,
         SaltString,
     },
-    Argon2, // The Argon2 algorithm struct
+    Argon2,
 };
 
 #[derive(serde::Deserialize)]
@@ -76,7 +75,10 @@ pub async fn register(
         })? // Handle hashing errors
         .to_string(); // Convert the PasswordHash struct to a string for storage
     info!("Password hashed successfully for user: {}", username);
-    eprintln!("Registering user: {}, Hashed Password: {}", username, hashed_password);
+    eprintln!(
+        "Registering user: {}, Hashed Password: {}",
+        username, hashed_password
+    );
 
     let res =
         sqlx::query("INSERT INTO users (id, username, password_hash, icon) VALUES (?, ?, ?, ?)")
@@ -200,10 +202,11 @@ impl<'r> FromRequest<'r> for AuthUser {
                 if let Ok(TokenData { claims, .. }) = res {
                     let username = claims.sub;
                     // Retrieve user icon from the database
-                    let user_info = sqlx::query_as::<_, User>("SELECT * FROM users WHERE username = ?")
-                        .bind(&username)
-                        .fetch_one(&state.db)
-                        .await;
+                    let user_info =
+                        sqlx::query_as::<_, User>("SELECT * FROM users WHERE username = ?")
+                            .bind(&username)
+                            .fetch_one(&state.db)
+                            .await;
 
                     if let Ok(user) = user_info {
                         return Outcome::Success(AuthUser(username, user.icon));

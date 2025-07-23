@@ -7,6 +7,15 @@ pub struct User {
     pub username: String,
     pub icon: String,
     pub password_hash: String,
+    pub is_admin: bool,
+    pub is_super_admin: bool,
+    pub is_banned: bool,
+    pub ban_mute_until: Option<i64>,
+}
+
+#[derive(sqlx::FromRow, Debug, Clone)]
+pub struct ChannelBanInfo {
+    pub ban_mute_until: Option<i64>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -29,4 +38,14 @@ pub struct Channel {
     pub id: String,
     pub name: String,
     pub icon: String,
+}
+
+#[derive(sqlx::FromRow, Debug, Clone, Serialize)]
+pub struct ChannelProposal {
+    pub id: String,
+    pub name: String,
+    pub icon: String,
+    pub proposer_username: String,
+    pub status: String,
+    pub timestamp: i64,
 }

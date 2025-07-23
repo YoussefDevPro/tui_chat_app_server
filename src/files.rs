@@ -1,4 +1,3 @@
-// ADDED: ContentDisposition for parsing multipart headers.
 use content_disposition::parse_content_disposition;
 use log::{debug, error, info, warn};
 use rocket::tokio::fs::File;
@@ -13,17 +12,16 @@ use rocket::{
 };
 use rocket_multipart::MultipartReader;
 use tokio::io::AsyncReadExt;
-use uuid::Uuid; // Corrected import: Removed unused DispositionType
+use uuid::Uuid;
 
+use crate::data_access::get_channel_info;
 use crate::ws::BroadcastMessage;
 use crate::AppState;
-use base64::engine::Engine;
 use chrono::Utc;
-use futures_util::StreamExt;
-use mime; // Ensure 'mime' crate is in scope
+use mime;
 use mime_guess;
 use redis::AsyncCommands;
-use std::path::{Path, PathBuf}; // This is likely needed for .next() and the warning should disappear.
+use std::path::{Path, PathBuf};
 
 const UPLOADS_DIR: &str = "uploads";
 const MAX_FILE_SIZE: u64 = 10 * 1024 * 1024; // 10 MB
@@ -40,6 +38,7 @@ pub async fn upload_file(
     info!("Received file upload request for channel: {}", channel_id);
     let file_id = Uuid::new_v4().to_string();
     let mut original_file_name = "unknown".to_string();
+    let mut file_extension: Option<String> = None;
     let mut file_size: u64 = 0;
     let mut save_path = PathBuf::new();
 
@@ -64,23 +63,24 @@ pub async fn upload_file(
 
             if let Some(name_value) = parsed_disposition.name() {
                 debug!("Field name: {}", name_value);
-                if name_value == "file" {
-                    if let Some((filename_value, _)) = parsed_disposition.filename() {
-                        original_file_name = filename_value;
-                        info!("Detected file upload: {}", original_file_name);
-                    }
+                match name_value.as_str() {
+                    "file" => {
+                        if let Some((filename_value, _)) = parsed_disposition.filename() {
+                            original_file_name = filename_value;
+                            info!("Detected file upload: {}", original_file_name);
+                        }
 
-                    save_path = PathBuf::from(UPLOADS_DIR).join(&file_id);
-                    info!("Saving file to: {:?}", save_path);
-                    let mut dest_file = tokio::fs::File::create(&save_path).await.map_err(|e| {
-                        error!("Failed to create destination file: {:?}: {}", save_path, e);
-                        (
-                            Status::InternalServerError,
-                            Json(format!("Failed to create destination file: {}", e)),
-                        )
-                    })?;
-                    let bytes_written =
-                        tokio::io::copy(&mut field, &mut dest_file)
+                        save_path = PathBuf::from(UPLOADS_DIR).join(&file_id);
+                        info!("Saving file to: {:?}", save_path);
+                        let mut dest_file =
+                            tokio::fs::File::create(&save_path).await.map_err(|e| {
+                                error!("Failed to create destination file: {:?}: {}", save_path, e);
+                                (
+                                    Status::InternalServerError,
+                                    Json(format!("Failed to create destination file: {}", e)),
+                                )
+                            })?;
+                        let bytes_written = tokio::io::copy(&mut field, &mut dest_file)
                             .await
                             .map_err(|e| {
                                 error!("Failed to write file to {:?}: {}", save_path, e);
@@ -89,9 +89,22 @@ pub async fn upload_file(
                                     Json(format!("Failed to write file: {}", e)),
                                 )
                             })?;
-                    file_size = bytes_written;
-                    info!("File saved successfully. Size: {} bytes.", file_size);
-                    break;
+                        file_size = bytes_written;
+                        info!("File saved successfully. Size: {} bytes.", file_size);
+                    }
+                    "file_extension" => {
+                        let mut ext_bytes = Vec::new();
+                        field.read_to_end(&mut ext_bytes).await.map_err(|e| {
+                            error!("Failed to read file extension: {}", e);
+                            (
+                                Status::InternalServerError,
+                                Json(format!("Failed to read file extension: {}", e)),
+                            )
+                        })?;
+                        file_extension = Some(String::from_utf8_lossy(&ext_bytes).to_string());
+                        info!("Received file extension: {:?}", file_extension);
+                    }
+                    _ => {}
                 }
             }
         }
@@ -127,10 +140,11 @@ pub async fn upload_file(
     }
 
     let file_size_mb = file_size as f64 / (1024.0 * 1024.0);
-    let is_image = mime_guess::from_path(&original_file_name)
-        .first_or(mime::APPLICATION_OCTET_STREAM)
-        .type_()
-        == "image";
+    let is_image = if let Some(ext) = file_extension.as_deref() {
+        matches!(ext, "jpg" | "jpeg" | "png" | "gif" | "bmp" | "svg")
+    } else {
+        false
+    };
     let image_preview: Option<String> = None;
 
     info!(
@@ -138,7 +152,7 @@ pub async fn upload_file(
         file_id
     );
     sqlx::query(
-        "INSERT INTO files (id, original_name, uploader_username, size_bytes, channel_id, created_at) VALUES (?, ?, ?, ?, ?, ?)"
+        "INSERT INTO files (id, original_name, uploader_username, size_bytes, channel_id, created_at, file_extension) VALUES (?, ?, ?, ?, ?, ?, ?)"
     )
     .bind(&file_id)
     .bind(&original_file_name)
@@ -146,6 +160,7 @@ pub async fn upload_file(
     .bind(file_size as i64)
     .bind(&channel_id)
     .bind(Utc::now().timestamp())
+    .bind(&file_extension)
     .execute(&state.db)
     .await
     .map_err(|e| {
@@ -172,7 +187,7 @@ pub async fn upload_file(
     info!("Connected to Redis.");
 
     debug!("Getting channel info for channel_id: {}", channel_id);
-    let channel_info = crate::ws::get_channel_info(&state.db, &channel_id)
+    let channel_info = get_channel_info(&state.db, &channel_id)
         .await
         .map_err(|e| {
             error!(
@@ -186,14 +201,12 @@ pub async fn upload_file(
         })?;
     info!("Channel info retrieved for channel_id: {}", channel_id);
 
-    let file_extension = Path::new(&original_file_name)
-        .extension()
-        .and_then(|s| s.to_str())
-        .map(|s| s.to_string());
+    let file_extension_for_message = file_extension.clone();
+    let file_extension_for_icon = file_extension.as_deref();
 
     let message = BroadcastMessage {
         user: user.0.clone(),
-        icon: get_nerd_font_icon_for_extension(file_extension.as_deref()).to_string(),
+        icon: user.1.clone(),
         content: format!("{} uploaded a file: {}", user.0, original_file_name),
         timestamp: Utc::now().timestamp(),
         channel_id: channel_id.clone(),
@@ -201,7 +214,8 @@ pub async fn upload_file(
         channel_icon: channel_info.icon,
         message_type: "file".to_string(),
         file_name: Some(original_file_name.clone()),
-        file_extension,
+        file_extension: file_extension_for_message,
+        file_icon: Some(get_nerd_font_icon_for_extension(file_extension_for_icon).to_string()),
         file_size_mb: Some(file_size_mb),
         is_image: Some(is_image),
         image_preview,
@@ -210,6 +224,7 @@ pub async fn upload_file(
             "https://back.reetui.hackclub.app/files/download/{}",
             file_id
         )),
+        download_progress: Some(0),
     };
 
     debug!("Serializing broadcast message.");
@@ -274,7 +289,7 @@ fn get_nerd_font_icon_for_extension(extension: Option<&str>) -> &str {
         Some("txt") => "",                             // nf-fa-file_text_o
         Some("json") => "",                            // nf-md-json
         Some("xml") => "󰗀",                             // nf-md-xml
-        Some("html") | Some("htm") => "htm",            // nf-dev-html5
+        Some("html") | Some("htm") => "",              // nf-dev-html5
         Some("css") => "",                             // nf-dev-css3
         Some("js") | Some("jsx") => "",                // nf-dev-javascript
         Some("ts") | Some("tsx") => "",                // nf-dev-typescript
@@ -284,7 +299,7 @@ fn get_nerd_font_icon_for_extension(extension: Option<&str>) -> &str {
         Some("java") => "",                            // nf-dev-java
         Some("c") | Some("cpp") | Some("h") => "",     // nf-dev-c
         Some("sh") | Some("bash") => "",               // nf-fa-terminal
-        Some("md") => " ",                             // nf-fa-file_markdown
+        Some("md") => "",                              // nf-dev-markdown
         _ => "",                                       // nf-fa-file_o (generic file icon)
     }
 }
@@ -319,23 +334,26 @@ pub async fn download_file(
     file_id: String,
 ) -> Result<FileDownload, (Status, String)> {
     info!("Received file download request for file_id: {}", file_id);
-    let file_metadata = sqlx::query!("SELECT original_name FROM files WHERE id = ?", file_id)
-        .fetch_optional(&state.db)
-        .await
-        .map_err(|e| {
-            error!(
-                "Failed to query file metadata for file_id {}: {}",
-                file_id, e
-            );
-            (
-                Status::InternalServerError,
-                format!("Failed to query file metadata: {}", e),
-            )
-        })?
-        .ok_or_else(|| {
-            warn!("File not found in database for file_id: {}", file_id);
-            (Status::NotFound, "File not found.".to_string())
-        })?;
+    let file_metadata = sqlx::query!(
+        "SELECT original_name, file_extension FROM files WHERE id = ?",
+        file_id
+    )
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| {
+        error!(
+            "Failed to query file metadata for file_id {}: {}",
+            file_id, e
+        );
+        (
+            Status::InternalServerError,
+            format!("Failed to query file metadata: {}", e),
+        )
+    })?
+    .ok_or_else(|| {
+        warn!("File not found in database for file_id: {}", file_id);
+        (Status::NotFound, "File not found.".to_string())
+    })?;
 
     let file_path = PathBuf::from(UPLOADS_DIR).join(&file_id);
     info!("Attempting to open file for download: {:?}", file_path);
@@ -349,13 +367,19 @@ pub async fn download_file(
     })?;
     info!("File opened successfully for download: {:?}", file_path);
 
+    let filename_with_extension = if let Some(ext) = file_metadata.file_extension.clone() {
+        format!("{}.{}", file_metadata.original_name, ext)
+    } else {
+        file_metadata.original_name
+    };
+
     info!(
         "Serving file {} (id: {}) for download.",
-        file_metadata.original_name, file_id
+        filename_with_extension, file_id
     );
     // Return our custom responder struct.
     Ok(FileDownload {
         file,
-        filename: file_metadata.original_name,
+        filename: filename_with_extension,
     })
 }
